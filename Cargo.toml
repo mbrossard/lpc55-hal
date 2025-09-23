@@ -36,6 +36,7 @@ void = { version = "1", default-features = false }
 # cortex-m-rtic = { version = "0.5", optional = true }
 littlefs2-v07 = { package = "littlefs2", version = "0.7", optional = true }
 littlefs2-v08 = { package = "littlefs2", version = "0.8", optional = true }
+embedded-io = "0.6.1"
 
 [dev-dependencies]
 aes = "0.8"
