@@ -27,7 +27,8 @@ embedded-time = "0.12"
 generic-array = "1.0.0"
 lpc55-pac = "0.5"
 nb = "1"
-rand_core = "0.6"
+rand_core06 = { package = "rand_core", version = "0.6", optional = true}
+rand_core09 = { package = "rand_core", version = "0.9", optional = true}
 usb-device = "0.3.2"
 vcell = "0.1"
 void = { version = "1", default-features = false }
@@ -58,6 +59,12 @@ default = ["rt"]
 rt = ["lpc55-pac/rt"]
 # no longer a HAL feature, just for the usb examples
 highspeed-usb-example = []
+rand-core-06 = ["dep:rand_core06"]
+rand-core-09 = ["dep:rand_core09"]
+
+[[example]]
+name = "rng"
+required-features = ["rand-core-09"]
 
 "littlefs2-v0.7" = ["dep:littlefs2-v07"]
 "littlefs2-v0.8" = ["dep:littlefs2-v08"]
