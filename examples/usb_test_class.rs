@@ -68,10 +68,13 @@ fn main() -> ! {
 
     let mut test = TestClass::new(&usb_bus);
     let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(VID, PID))
-        .manufacturer(MANUFACTURER)
-        .product(PRODUCT)
-        .serial_number(SERIAL_NUMBER)
+        .strings(&[usb_device::device::StringDescriptors::default()
+            .manufacturer(MANUFACTURER)
+            .product(PRODUCT)
+            .serial_number(SERIAL_NUMBER)])
+        .unwrap()
         .max_packet_size_0(64)
+        .unwrap()
         .build();
 
     loop {

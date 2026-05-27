@@ -31,17 +31,13 @@ mod app {
     }
 
     #[init]
-    fn init(_ctx: init::Context) -> (SharedResources, LocalResources, init::Monotonics) {
+    fn init(_ctx: init::Context) -> (SharedResources, LocalResources) {
         static mut Q: Queue<u32, 4> = Queue::new();
 
         let (p, c) = unsafe { (*addr_of_mut!(Q)).split() };
 
         // Initialization of late resources
-        (
-            SharedResources {},
-            LocalResources { p, c },
-            init::Monotonics(),
-        )
+        (SharedResources {}, LocalResources { p, c })
     }
 
     #[idle(local = [c])]
