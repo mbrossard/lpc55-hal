@@ -14,6 +14,26 @@ use crate::typestates::{
 
 use crate::traits::usb::{Usb, UsbSpeed};
 
+// USBPHY_CTRL bits, written through the one-shot CTRL_SET/CTRL_CLR aliases.
+const CTRL_ENAUTOCLR_CLKGATE: u32 = 1 << 19;
+const CTRL_CLKGATE: u32 = 1 << 30;
+const CTRL_SFTRST: u32 = 1 << 31;
+
+// USBPHY_PLL_SIC bits, written through the one-shot PLL_SIC_SET/PLL_SIC_CLR aliases.
+const PLL_SIC_EN_USB_CLKS: u32 = 1 << 6;
+const PLL_SIC_POWER: u32 = 1 << 12;
+// Reserved; UM11126 rev 2.8 Table 850 says software must write it 0, and it resets to 1.
+const PLL_SIC_RESERVED_16: u32 = 1 << 16;
+const PLL_SIC_REG_ENABLE: u32 = 1 << 21;
+
+/// How many times to issue `CTRL_CLR = CLKGATE` before giving up on the read-back confirming it.
+///
+/// The clear is not reliably taken on the first write after the PHY has been through a soft
+/// reset, and the vendor's guidance for this PHY macro is to read the bit back rather than assume
+/// one write lands. A second write has always been enough; four bounds the loop with margin and
+/// costs nothing on the path where the first write works.
+const CLKGATE_CLEAR_ATTEMPTS: u32 = 4;
+
 // Main struct
 pub struct Usbhs<
     State: init_state::InitState = init_state::Unknown,
@@ -103,40 +123,65 @@ impl<State: init_state::InitState, Mode: usbhs_mode::UsbhsMode> Usbhs<State, Mod
 
         syscon.enable_clock(&mut self.raw_phy);
 
-        // Initial config of PHY control registers
-        self.raw_phy.ctrl.write(|w| w.sftrst().clear_bit());
+        // Initial config of PHY control registers.
+        //
+        // Every access below goes through the one-shot SET/CLR aliases, never a read-modify-write
+        // of a live PHY control register. UM11126 rev 2.8, section 44.3 and the SDK
+        // (`CLOCK_EnableUsbhs0PhyPllClock`) both do it that way: an RMW of USBPHY_CTRL rewrites
+        // all 32 bits, including the reset and clock-gate controls, which is not the same
+        // operation as clearing one bit.
+        //
+        // SFTRST and CLKGATE are cleared by two separate writes, and in that order. Hardware
+        // forces CLKGATE set while SFTRST is asserted, so a combined clear would release the
+        // reset and silently leave the PHY gated.
+        self.raw_phy
+            .ctrl_clr
+            .write(|w| unsafe { w.bits(CTRL_SFTRST) });
 
-        self.raw_phy.pll_sic.modify(|_, w| {
-            w.pll_div_sel()
-                .bits(6) /* 16MHz = xtal32m */
-                .pll_reg_enable()
-                .set_bit()
-        });
+        self.raw_phy
+            .pll_sic
+            .modify(|_, w| w.pll_div_sel().bits(6) /* 16MHz = xtal32m */);
 
-        self.raw_phy.pll_sic_clr.write(|w| unsafe {
-            // must be done, according to SDK.
-            w.bits(1 << 16 /* mystery bit */)
-        });
+        self.raw_phy
+            .pll_sic_set
+            .write(|w| unsafe { w.bits(PLL_SIC_REG_ENABLE) });
+
+        self.raw_phy
+            .pll_sic_clr
+            .write(|w| unsafe { w.bits(PLL_SIC_RESERVED_16) });
 
         // Must wait at least 15 us for pll-reg to stabilize
         timer.start(15.microseconds());
         nb::block!(timer.wait()).ok();
 
         self.raw_phy
-            .pll_sic
-            .modify(|_, w| w.pll_power().set_bit().pll_en_usb_clks().set_bit());
+            .pll_sic_set
+            .write(|w| unsafe { w.bits(PLL_SIC_POWER) });
 
-        self.raw_phy.ctrl.modify(|_, w| {
-            w.clkgate()
-                .clear_bit()
-                .enautoclr_clkgate()
-                .set_bit()
-                .enautoclr_phy_pwd()
-                .clear_bit()
-        });
+        self.raw_phy
+            .pll_sic_set
+            .write(|w| unsafe { w.bits(PLL_SIC_EN_USB_CLKS) });
+
+        // Ungate the PHY here, after PLL_EN_USB_CLKS, which is where 44.3 puts it -- and confirm
+        // it. A clear issued after the PHY has been soft-reset can be dropped, and a PHY left
+        // gated has a locked PLL, a responsive register file and no D+ pull-up, so nothing
+        // downstream of this point would notice.
+        for _ in 0..CLKGATE_CLEAR_ATTEMPTS {
+            self.raw_phy
+                .ctrl_clr
+                .write(|w| unsafe { w.bits(CTRL_CLKGATE) });
+            if self.raw_phy.ctrl.read().bits() & CTRL_CLKGATE == 0 {
+                break;
+            }
+        }
 
         // Turn on everything in PHY
         self.raw_phy.pwd.write(|w| unsafe { w.bits(0) });
+
+        // ENAUTOCLR_PHY_PWD is already 0 out of reset, so nothing here needs to clear it.
+        self.raw_phy
+            .ctrl_set
+            .write(|w| unsafe { w.bits(CTRL_ENAUTOCLR_CLKGATE) });
 
         // turn on USB1 device controller access
         syscon.enable_clock(&mut self.raw_hsd);
