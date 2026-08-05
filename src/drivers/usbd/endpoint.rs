@@ -353,6 +353,9 @@ where
 
                 self.reset_out_buf(cs, epl);
                 usb.intstat.write(|w| w.ep0out().set_bit());
+                if usb.devcmdstat.read().setup().bit_is_set() {
+                    unsafe { usb.intsetstat.write(|w| w.bits(1)) };
+                }
 
                 Ok(count)
             }
