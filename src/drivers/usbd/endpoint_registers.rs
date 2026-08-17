@@ -333,6 +333,26 @@ pub mod epr {
         }
     }
 
+    pub struct _TRW<'a> {
+        w: &'a mut W,
+    }
+    impl<'a> _TRW<'a> {
+        /// Request a data-toggle reset: with RFTV clear, hardware reinitializes the endpoint's
+        /// toggle to DATA0 and clears this bit again.
+        #[inline]
+        pub fn toggle_reset(self) -> &'a mut W {
+            self.bit(true)
+        }
+        #[inline]
+        pub fn bit(self, value: bool) -> &'a mut W {
+            const MASK: bool = true;
+            const OFFSET: u8 = 28;
+            self.w.bits &= !((MASK as u32) << OFFSET);
+            self.w.bits |= ((value & MASK) as u32) << OFFSET;
+            self.w
+        }
+    }
+
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum SR {
         NotStalled,
@@ -709,11 +729,11 @@ pub mod epr {
         // pub fn rftv(&self) -> _RFTVW {
         //     _RFTVW { w: self }
         // }
-        // #[doc = "Bit 28 - Toggle reset"]
-        // #[inline]
-        // pub fn tr(&self) -> _TRW {
-        //     _TRW { w: self }
-        // }
+        #[doc = "Bit 28 - Toggle reset"]
+        #[inline]
+        pub fn tr(&mut self) -> _TRW<'_> {
+            _TRW { w: self }
+        }
         #[doc = "Bit 29 - Stall"]
         #[inline]
         pub fn s(&mut self) -> _SW<'_> {

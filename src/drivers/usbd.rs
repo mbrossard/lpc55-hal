@@ -431,27 +431,66 @@ where
 
     fn set_stalled(&self, ep_addr: EndpointAddress, stalled: bool) {
         interrupt::free(|cs| {
-            if self.is_stalled(ep_addr) == stalled {
-                return;
-            }
-
             let i = ep_addr.index();
-            let ep = &self.ep_regs.borrow(cs).eps[i];
+            let usb = self.usb_regs.borrow(cs);
+            let eps = self.ep_regs.borrow(cs);
+            let ep = &eps.eps[i];
 
-            if i > 0 {
+            if stalled {
+                if self.is_stalled(ep_addr) {
+                    return;
+                }
+                // Deactivate an armed buffer through EPSKIP (a hardware-bounded handshake)
+                // rather than spinning on Active: Active only clears when the HOST moves a
+                // packet, so the previous wait could spin forever inside the USB interrupt --
+                // e.g. stalling an armed OUT endpoint whose data never arrives -- taking the
+                // whole device off the bus. The vendor reference driver skips, then stalls.
+                if i > 0 {
+                    let bit: u32 = 1
+                        << match ep_addr.direction() {
+                            UsbDirection::Out => 2 * i,
+                            UsbDirection::In => 2 * i + 1,
+                        };
+                    let active = match ep_addr.direction() {
+                        UsbDirection::In => ep.ep_in[0].read().a().is_active(),
+                        UsbDirection::Out => ep.ep_out[0].read().a().is_active(),
+                    };
+                    if active {
+                        usb.epskip.modify(|r, w| unsafe { w.bits(r.bits() | bit) });
+                        while usb.epskip.read().bits() & bit != 0 {}
+                        // The forced Active 1->0 edge raises the endpoint interrupt without a
+                        // completed transfer behind it; drop it.
+                        usb.intstat.write(|w| unsafe { w.bits(bit) });
+                    }
+                }
                 match ep_addr.direction() {
-                    UsbDirection::In => while ep.ep_in[0].read().a().is_active() {},
-                    UsbDirection::Out => while ep.ep_out[0].read().a().is_active() {},
+                    UsbDirection::In => ep.ep_in[0].modify(|_, w| w.s().stalled()),
+                    UsbDirection::Out => ep.ep_out[0].modify(|_, w| w.s().stalled()),
+                };
+            } else {
+                // A ClearFeature(ENDPOINT_HALT) reinitializes the data toggle to DATA0 whether
+                // or not the endpoint was halted (USB 2.0, 9.4.5): without the reset the host's
+                // toggle restarts while the device's does not, and every second IN packet the
+                // device then sends is ACKed and silently discarded as a retransmission. The
+                // reference driver also re-arms the OUT buffer the stall deactivated.
+                match ep_addr.direction() {
+                    UsbDirection::In => {
+                        if i > 0 {
+                            ep.ep_in[0].modify(|_, w| w.s().not_stalled().tr().toggle_reset());
+                        } else {
+                            ep.ep_in[0].modify(|_, w| w.s().not_stalled());
+                        }
+                    }
+                    UsbDirection::Out => {
+                        if i > 0 {
+                            ep.ep_out[0].modify(|_, w| w.s().not_stalled().tr().toggle_reset());
+                            self.endpoints[i].reset_out_buf(cs, eps);
+                        } else {
+                            ep.ep_out[0].modify(|_, w| w.s().not_stalled());
+                        }
+                    }
                 }
             }
-
-            match (stalled, ep_addr.direction()) {
-                (true, UsbDirection::In) => ep.ep_in[0].modify(|_, w| w.s().stalled()),
-                (true, UsbDirection::Out) => ep.ep_out[0].modify(|_, w| w.s().stalled()),
-
-                (false, UsbDirection::In) => ep.ep_in[0].modify(|_, w| w.s().not_stalled()),
-                (false, UsbDirection::Out) => ep.ep_out[0].modify(|_, w| w.s().not_stalled()),
-            };
         });
     }
 
