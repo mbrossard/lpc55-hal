@@ -277,11 +277,11 @@ where
 
             let ep_out_is_active = epl.eps[i].ep_out[0].read().a().is_active();
 
-            if ep_out_int && ep_out_is_active {
-                // cortex_m_semihosting::hprintln!("what the hello, EP {} signals interrupt but it's still active", i).ok();
-            }
-
-            if !ep_out_int || ep_out_is_active {
+            // `UsbBus::poll` has already cleared the interrupt flag, so the active bit is the
+            // record of a waiting packet: active means the controller still owns the buffer and
+            // nothing has landed.
+            let _ = ep_out_int;
+            if ep_out_is_active {
                 return Err(UsbError::WouldBlock);
             }
             let out_buf = self.out_buf.as_ref().unwrap().borrow(cs);
@@ -292,8 +292,6 @@ where
             let count = out_buf.capacity() - nbytes;
 
             out_buf.read(&mut buf[..count]);
-
-            unsafe { usb.intstat.write(|w| w.bits(ep_out_mask)) };
 
             // self.reset_out_buf(cs, epl);
             epl.eps[i].ep_out[0].modify(
