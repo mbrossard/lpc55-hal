@@ -147,6 +147,17 @@ where
                     ep.set_out_buf(buffer);
                     debug_assert!(ep.is_out_buf_set());
 
+                    // A second receive buffer for every non-control OUT endpoint, so the
+                    // controller can take the next packet while software is still copying the
+                    // last one out. Endpoint 0 is fixed to single buffering by the hardware. If
+                    // the USB SRAM cannot spare it, the endpoint stays single-buffered rather
+                    // than failing the allocation.
+                    if index != 0 {
+                        if let Ok(second) = self.ep_allocator.allocate_buffer(size as _) {
+                            ep.set_out_buf1(second);
+                        }
+                    }
+
                     if index == 0 {
                         let setup = self.ep_allocator.allocate_buffer(8)?;
                         ep.set_setup_buf(setup);
@@ -237,6 +248,24 @@ where
 
             usb.devcmdstat
                 .modify(|_, w| unsafe { w.dev_addr().bits(0) });
+
+            // Before the buffers are armed: the bit decides whether hardware toggles `EPINUSE`
+            // when it clears an active bit, and arming both halves under the wrong setting leaves
+            // the two sides disagreeing about which buffer is next.
+            let mut bufcfg = 0u32;
+            for ep in self.endpoints.iter() {
+                if ep.is_out_buf1_set() {
+                    bufcfg |= 1 << (ep.index() << 1);
+                }
+            }
+            usb.epbufcfg
+                .modify(|r, w| unsafe { w.bits(r.bits() | bufcfg) });
+            // And point the hardware at buffer 0, because software starts there too. Nothing
+            // resets `EPINUSE` for us, and if the two sides disagree about which half is next
+            // every packet is delivered out of order -- which reads as a corrupt byte stream on
+            // CDC and as mismatched command ids on the DAP endpoint.
+            usb.epinuse
+                .modify(|r, w| unsafe { w.bits(r.bits() & !bufcfg) });
 
             for ep in self.endpoints.iter() {
                 ep.configure(cs, usb, eps);
@@ -347,24 +376,19 @@ where
                 // OUT = READ
                 let out_offset = 2 * i;
                 let out_int = ((intstat_r.bits() >> out_offset) & 0x1) != 0;
-                let out_inactive = eps.eps[i].ep_out[0].read().a().is_not_active();
+                let out_inactive = eps.eps[i].ep_out[0].read().a().is_not_active()
+                    || (ep.is_out_buf1_set() && eps.eps[i].ep_out[1].read().a().is_not_active());
 
-                // Cleared as soon as it is seen. The flag is level-driven, so leaving it set to
-                // remember an unread packet re-enters this handler the instant it returns, and a
-                // class that declines to read -- which is how a class back-pressures the host,
-                // since an inactive endpoint NAKs -- then spins the CPU. What records a waiting
-                // packet is the endpoint's own active bit, read above.
+                // Cleared unconditionally: the flag is level-driven, so leaving it set to
+                // remember an unread packet re-enters this handler forever. What a packet is
+                // waiting in is the endpoint's own active bit, which is read below and cannot be
+                // lost or raced -- the hardware owns it, and one flag could never have described
+                // two buffers anyway.
                 if out_int {
                     usb.intstat.write(|w| unsafe { w.bits(1u32 << out_offset) });
                 }
                 if out_inactive {
                     ep_out |= bit;
-
-                    // let err_code = usb.info.read().err_code().bits();
-                    // let addr_set = devcmdstat.read().dev_addr().bits() > 0;
-                    // if addr_set && err_code > 0 {
-                    //     hprintln!("error {}", err_code).ok();
-                    // }
                 }
 
                 // IN = WRITE
