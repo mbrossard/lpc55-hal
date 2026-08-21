@@ -19,6 +19,13 @@ where
     USB: Usb<init_state::Enabled>,
 {
     out_buf: Option<Mutex<EndpointBuffer>>,
+    /// Second receive buffer, for double buffering. When present, both `ep_out` entries are kept
+    /// armed so the controller can accept a packet while the previous one is still being copied
+    /// out, instead of NAKing until software comes back.
+    out_buf1: Option<Mutex<EndpointBuffer>>,
+    /// Which of the two buffers software reads next. The hardware's own `EPINUSE` says which one
+    /// it will fill next, which is not the same question, and ordering is ours to keep.
+    next_out: core::sync::atomic::AtomicBool,
     setup_buf: Option<Mutex<EndpointBuffer>>,
     in_buf: Option<Mutex<EndpointBuffer>>,
     ep_type: Option<EndpointType>,
@@ -34,6 +41,8 @@ where
     pub fn new(index: u8) -> Endpoint<USB> {
         Endpoint::<USB> {
             out_buf: None,
+            out_buf1: None,
+            next_out: core::sync::atomic::AtomicBool::new(false),
             setup_buf: None,
             in_buf: None,
             ep_type: None,
@@ -70,6 +79,14 @@ where
         self.out_buf = Some(Mutex::new(buffer));
     }
 
+    pub fn is_out_buf1_set(&self) -> bool {
+        self.out_buf1.is_some()
+    }
+
+    pub fn set_out_buf1(&mut self, buffer: EndpointBuffer) {
+        self.out_buf1 = Some(Mutex::new(buffer));
+    }
+
     pub fn reset_out_buf(&self, cs: &CriticalSection, epl: &EndpointRegistersInstance) {
         // hardware modifies the NBytes and Offset entries, need to change them back periodically
         if !self.is_out_buf_set() {
@@ -93,6 +110,27 @@ where
                 .s()
                 .not_stalled()
         });
+        // Both halves armed, and software back to reading the first: the controller starts from
+        // buffer 0 after a reset, and the two must agree or the stream comes out reordered.
+        if let Some(buf1) = self.out_buf1.as_ref() {
+            let buf1 = buf1.borrow(cs);
+            let addroff1 = self.buf_addroff(buf1);
+            let len1 = buf1.capacity() as u16;
+            epl.eps[i].ep_out[1].modify(|_, w| {
+                w.nbytes::<USB>()
+                    .bits(len1)
+                    .addroff::<USB>()
+                    .bits(addroff1)
+                    .a()
+                    .active()
+                    .d()
+                    .enabled()
+                    .s()
+                    .not_stalled()
+            });
+            self.next_out
+                .store(false, core::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     // pub fn enable_out_interrupt(&self, usb: &USB1) {
@@ -275,26 +313,36 @@ where
 
             let ep_out_int = (usb.intstat.read().bits() & ep_out_mask) != 0;
 
-            let ep_out_is_active = epl.eps[i].ep_out[0].read().a().is_active();
-
-            // `UsbBus::poll` has already cleared the interrupt flag, so the active bit is the
-            // record of a waiting packet: active means the controller still owns the buffer and
-            // nothing has landed.
+            let half = if self.is_out_buf1_set() {
+                self.next_out.load(core::sync::atomic::Ordering::Relaxed) as usize
+            } else {
+                0
+            };
+            // `poll` has already cleared the interrupt flag; the active bit is the record of a
+            // waiting packet. Active means the controller still owns this half and nothing landed.
             let _ = ep_out_int;
-            if ep_out_is_active {
+            if epl.eps[i].ep_out[half].read().a().is_active() {
                 return Err(UsbError::WouldBlock);
             }
-            let out_buf = self.out_buf.as_ref().unwrap().borrow(cs);
+            let out_buf = if half == 1 {
+                self.out_buf1.as_ref().unwrap().borrow(cs)
+            } else {
+                self.out_buf.as_ref().unwrap().borrow(cs)
+            };
 
-            let nbytes = epl.eps[i].ep_out[0].read().nbytes::<USB>().bits() as usize;
+            let nbytes = epl.eps[i].ep_out[half].read().nbytes::<USB>().bits() as usize;
 
             // let count = min((out_buf.capacity() - nbytes) as usize, buf.len());
             let count = out_buf.capacity() - nbytes;
 
             out_buf.read(&mut buf[..count]);
 
+            if self.is_out_buf1_set() {
+                self.next_out
+                    .store(half == 0, core::sync::atomic::Ordering::Relaxed);
+            }
             // self.reset_out_buf(cs, epl);
-            epl.eps[i].ep_out[0].modify(
+            epl.eps[i].ep_out[half].modify(
                 |_, w| {
                     w.nbytes::<USB>()
                         .bits(out_buf.capacity() as u16)
