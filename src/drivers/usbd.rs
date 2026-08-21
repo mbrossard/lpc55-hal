@@ -349,11 +349,16 @@ where
                 let out_int = ((intstat_r.bits() >> out_offset) & 0x1) != 0;
                 let out_inactive = eps.eps[i].ep_out[0].read().a().is_not_active();
 
+                // Cleared as soon as it is seen. The flag is level-driven, so leaving it set to
+                // remember an unread packet re-enters this handler the instant it returns, and a
+                // class that declines to read -- which is how a class back-pressures the host,
+                // since an inactive endpoint NAKs -- then spins the CPU. What records a waiting
+                // packet is the endpoint's own active bit, read above.
                 if out_int {
-                    debug_assert!(out_inactive);
+                    usb.intstat.write(|w| unsafe { w.bits(1u32 << out_offset) });
+                }
+                if out_inactive {
                     ep_out |= bit;
-                    // EXPERIMENTAL: clear interrupt
-                    // usb.intstat.write(|w| unsafe { w.bits(1u32 << out_offset) } );
 
                     // let err_code = usb.info.read().err_code().bits();
                     // let addr_set = devcmdstat.read().dev_addr().bits() > 0;
