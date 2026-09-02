@@ -24,23 +24,38 @@ impl EndpointBuffer {
         Self(mem)
     }
 
+    /// Copy out of USB RAM a word at a time: the buffers are 64-byte aligned, and the caller's
+    /// slice may not be, so the destination side is an unaligned store.
     pub fn read(&self, buf: &mut [u8]) {
-        // for i in 0..min(buf.len(), self.0.len()) {
-        //     buf[i] = self.0[i].get();
-        // }
         let count = min(buf.len(), self.0.len());
-        for (i, entry) in buf.iter_mut().enumerate().take(count) {
-            *entry = self.0[i].get();
+        let src = self.0.as_ptr() as *const u32;
+        let dst = buf.as_mut_ptr();
+        let words = count / 4;
+        for i in 0..words {
+            // SAFETY: `src` is the word-aligned USB RAM buffer and `i * 4 < count <= len`.
+            let w = unsafe { src.add(i).read_volatile() };
+            // SAFETY: `dst` has at least `count` bytes; the store is unaligned-safe.
+            unsafe { (dst.add(i * 4) as *mut u32).write_unaligned(w) };
+        }
+        for i in words * 4..count {
+            buf[i] = self.0[i].get();
         }
     }
 
+    /// Copy into USB RAM a word at a time; see [`read`](Self::read).
     pub fn write(&self, buf: &[u8]) {
-        // for i in 0..min(buf.len(), self.0.len()) {
-        //     self.0[i].set(buf[i]);
-        // }
         let count = min(buf.len(), self.0.len());
-        for (i, entry) in buf.iter().enumerate().take(count) {
-            self.0[i].set(*entry);
+        let dst = self.0.as_ptr() as *mut u32;
+        let src = buf.as_ptr();
+        let words = count / 4;
+        for i in 0..words {
+            // SAFETY: `src` has at least `count` bytes; the load is unaligned-safe.
+            let w = unsafe { (src.add(i * 4) as *const u32).read_unaligned() };
+            // SAFETY: `dst` is the word-aligned USB RAM buffer and `i * 4 < count <= len`.
+            unsafe { dst.add(i).write_volatile(w) };
+        }
+        for i in words * 4..count {
+            self.0[i].set(buf[i]);
         }
     }
 
