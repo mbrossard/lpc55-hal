@@ -60,13 +60,12 @@ rt = ["lpc55-pac/rt"]
 highspeed-usb-example = []
 rand-core-06 = ["dep:rand_core06"]
 rand-core-09 = ["dep:rand_core09"]
+"littlefs2-v0.7" = ["dep:littlefs2-v07"]
+"littlefs2-v0.8" = ["dep:littlefs2-v08"]
 
 [[example]]
 name = "rng"
 required-features = ["rand-core-09"]
-
-"littlefs2-v0.7" = ["dep:littlefs2-v07"]
-"littlefs2-v0.8" = ["dep:littlefs2-v08"]
 
 [profile.release]
 codegen-units = 1

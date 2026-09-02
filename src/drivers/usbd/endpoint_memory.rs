@@ -37,8 +37,9 @@ impl EndpointBuffer {
             // SAFETY: `dst` has at least `count` bytes; the store is unaligned-safe.
             unsafe { (dst.add(i * 4) as *mut u32).write_unaligned(w) };
         }
-        for i in words * 4..count {
-            buf[i] = self.0[i].get();
+        let tail = words * 4;
+        for (dst, src) in buf[tail..count].iter_mut().zip(&self.0[tail..count]) {
+            *dst = src.get();
         }
     }
 
@@ -54,8 +55,9 @@ impl EndpointBuffer {
             // SAFETY: `dst` is the word-aligned USB RAM buffer and `i * 4 < count <= len`.
             unsafe { dst.add(i).write_volatile(w) };
         }
-        for i in words * 4..count {
-            self.0[i].set(buf[i]);
+        let tail = words * 4;
+        for (dst, src) in self.0[tail..count].iter().zip(&buf[tail..count]) {
+            dst.set(*src);
         }
     }
 

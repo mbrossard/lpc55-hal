@@ -318,7 +318,7 @@ where
         address: u8,
         operations: &mut [embedded_hal::i2c::Operation<'_>],
     ) -> core::result::Result<(), Self::Error> {
-        let [ref mut current, ref mut rem @ ..] = operations else {
+        let [current, rem @ ..] = operations else {
             // No operations mean noop
             return Ok(());
         };

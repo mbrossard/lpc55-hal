@@ -3,8 +3,8 @@ pub enum Error {}
 
 #[cfg(feature = "rand-core-06")]
 mod rand06 {
-    use crate::typestates::init_state;
     use crate::Rng;
+    use crate::typestates::init_state;
 
     use rand_core06::RngCore;
 
@@ -32,8 +32,8 @@ mod rand06 {
 
 #[cfg(feature = "rand-core-09")]
 mod rand09 {
-    use crate::typestates::init_state;
     use crate::Rng;
+    use crate::typestates::init_state;
 
     use rand_core09::RngCore;
 
