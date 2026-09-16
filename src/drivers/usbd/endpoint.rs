@@ -187,11 +187,6 @@ where
         // let len = buf.len() as u32;
 
         let i = self.index as usize;
-        if i > 0 {
-            debug_assert!(epl.eps[i].ep_in[0].read().a().is_not_active());
-            // while epl.eps[i].ep_in[0].read().a().is_active() {}
-        }
-
         if i == 0 {
             epl.eps[0].ep_in[0].modify(|_, w| {
                 w.nbytes::<USB>()
@@ -209,6 +204,9 @@ where
                     .bits(0)
                     .addroff::<USB>()
                     .bits(addroff)
+                    // A reset retires any reply the host had not consumed.
+                    .a()
+                    .not_active()
                     .d()
                     .enabled()
                     .s()
