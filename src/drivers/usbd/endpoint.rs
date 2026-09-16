@@ -266,7 +266,8 @@ where
                     .active()
             });
         } else {
-            if epl.eps[i].ep_in[0].read().a().is_active() {
+            let status = epl.eps[i].ep_in[0].read();
+            if status.a().is_active() || status.s().is_stalled() {
                 // NB: With this test in place, `bench_bulk_read` from TestClass fails.
                 // cortex_m_semihosting::hprintln!("can't write yet, EP {} IN still active", i).ok();
                 //
@@ -319,7 +320,8 @@ where
             // `poll` has already cleared the interrupt flag; the active bit is the record of a
             // waiting packet. Active means the controller still owns this half and nothing landed.
             let _ = ep_out_int;
-            if epl.eps[i].ep_out[half].read().a().is_active() {
+            let status = epl.eps[i].ep_out[half].read();
+            if status.a().is_active() || status.s().is_stalled() {
                 return Err(UsbError::WouldBlock);
             }
             let out_buf = if half == 1 {

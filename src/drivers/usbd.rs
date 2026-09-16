@@ -482,7 +482,11 @@ where
                         };
                     let active = match ep_addr.direction() {
                         UsbDirection::In => ep.ep_in[0].read().a().is_active(),
-                        UsbDirection::Out => ep.ep_out[0].read().a().is_active(),
+                        UsbDirection::Out => {
+                            ep.ep_out[0].read().a().is_active()
+                                || (self.endpoints[i].is_out_buf1_set()
+                                    && ep.ep_out[1].read().a().is_active())
+                        }
                     };
                     if active {
                         usb.epskip.modify(|r, w| unsafe { w.bits(r.bits() | bit) });
@@ -494,7 +498,16 @@ where
                 }
                 match ep_addr.direction() {
                     UsbDirection::In => ep.ep_in[0].modify(|_, w| w.s().stalled()),
-                    UsbDirection::Out => ep.ep_out[0].modify(|_, w| w.s().stalled()),
+                    UsbDirection::Out => {
+                        if i > 0 {
+                            ep.ep_out[0].modify(|_, w| w.s().stalled().a().not_active());
+                            if self.endpoints[i].is_out_buf1_set() {
+                                ep.ep_out[1].modify(|_, w| w.s().stalled().a().not_active());
+                            }
+                        } else {
+                            ep.ep_out[0].modify(|_, w| w.s().stalled());
+                        }
+                    }
                 };
             } else {
                 // A ClearFeature(ENDPOINT_HALT) reinitializes the data toggle to DATA0 whether
@@ -512,6 +525,9 @@ where
                     }
                     UsbDirection::Out => {
                         if i > 0 {
+                            // Re-arming starts software at half zero; hardware must agree.
+                            usb.epinuse
+                                .modify(|r, w| unsafe { w.bits(r.bits() & !(1 << (2 * i))) });
                             ep.ep_out[0].modify(|_, w| w.s().not_stalled().tr().toggle_reset());
                             self.endpoints[i].reset_out_buf(cs, eps);
                         } else {
